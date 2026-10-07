@@ -16,7 +16,7 @@ class SalesGoalApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      title: '매출 목표 관리',
+      title: '매출관리',
 
       // ==============================
       // 한국어 설정
@@ -663,6 +663,8 @@ class _SalesGoalHomePageState
   // 매출 저장
   // =====================================================
   Future<void> saveSales() async {
+     FocusScope.of(context).unfocus();
+
     final value = int.tryParse(
           salesController.text
               .replaceAll(',', '')
@@ -1421,6 +1423,7 @@ class _SalesGoalHomePageState
                 FontWeight.bold,
           ),
         ),
+
         backgroundColor:
             Colors.transparent,
         elevation: 0,
