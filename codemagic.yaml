@@ -5,18 +5,12 @@ workflows:
     instance_type: mac_mini_m2
 
     environment:
-      flutter: stable
+      flutter: 3.47.5
       xcode: latest
-      cocoapods: default
 
     scripts:
       - name: Flutter packages
         script: flutter pub get
-
-      - name: Install CocoaPods
-        script: |
-          cd ios
-          pod install
 
       - name: Build iOS without code signing
         script: flutter build ios --release --no-codesign
