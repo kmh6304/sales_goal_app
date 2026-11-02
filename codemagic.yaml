@@ -13,8 +13,15 @@ workflows:
       - name: Flutter packages
         script: flutter pub get
 
-      - name: Build iOS IPA without code signing
-        script: flutter build ipa --release --no-codesign
+      - name: Build iOS app without code signing
+        script: flutter build ios --release --no-codesign
+
+      - name: Package unsigned IPA
+        script: |
+          mkdir -p build/ios/ipa/Payload
+          cp -R build/ios/iphoneos/Runner.app build/ios/ipa/Payload/
+          cd build/ios/ipa
+          zip -r 매출관리.ipa Payload
 
     artifacts:
       - build/ios/ipa/*.ipa
