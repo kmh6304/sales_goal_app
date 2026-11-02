@@ -21,7 +21,7 @@ workflows:
           mkdir -p build/ios/ipa/Payload
           cp -R build/ios/iphoneos/Runner.app build/ios/ipa/Payload/
           cd build/ios/ipa
-          zip -r 留ㅼ텧愿由?ipa Payload
+          zip -r SalesGoalApp.ipa Payload
 
     artifacts:
       - build/ios/ipa/*.ipa
