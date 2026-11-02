@@ -1,8 +1,12 @@
 import 'dart:async';
 import 'dart:convert';
-
+import 'dart:io';
+import 'dart:typed_data';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
@@ -83,6 +87,13 @@ class _SalesGoalHomePageState
   // =====================================================
 
   DateTime selectedDate = DateTime.now();
+
+  // 전체 매출 합산에서 선택한 월
+  DateTime summaryMonth = DateTime(
+    DateTime.now().year,
+    DateTime.now().month,
+    1,
+  );
 
   // =====================================================
   // 로딩 상태
@@ -196,9 +207,8 @@ class _SalesGoalHomePageState
     }
 
     final status = carry > 0 ? '초과' : '미달';
-    final sign = carry > 0 ? '+' : '-';
 
-    return '($status $sign${money(carry)})';
+    return '($status ${money(carry)})';
   }
 
   // =====================================================
@@ -444,16 +454,11 @@ class _SalesGoalHomePageState
         selectedDate = firstInputDate;
       }
 
-      final savedSelectedDates =
-          await prefs.getStringList(
-        selectedSalesDatesKey,
-      );
-
-      if (savedSelectedDates != null) {
-        selectedSalesDates
-          ..clear()
-          ..addAll(savedSelectedDates);
-      }
+      // 날짜 선택은 화면에서 임시로 사용하는 상태다.
+      // 이전 실행에서 저장된 날짜가 오늘 표시를 덮어쓰지 않도록
+      // 앱을 열 때 선택 목록을 비운다. 매출 데이터는 변경하지 않는다.
+      selectedSalesDates.clear();
+      await prefs.remove(selectedSalesDatesKey);
     } catch (e) {
       // 저장 데이터 오류가 있어도
       // 기본값으로 계속 실행
@@ -545,6 +550,186 @@ class _SalesGoalHomePageState
       dailySalesKey,
       encoded,
     );
+  }
+
+  // =====================================================
+  // 백업 파일 만들기
+  // =====================================================
+
+  Future<void> exportBackup() async {
+    try {
+      final backupData = <String, dynamic>{
+        'app': 'sales_goal_app',
+        'backupVersion': 1,
+        'backupDate': DateTime.now().toIso8601String(),
+        'baseGoal': baseGoal,
+        'dailySales': dailySales,
+        'goalHistory': goalHistory,
+      };
+
+      final now = DateTime.now();
+      final stamp = '${now.year}${now.month.toString().padLeft(2, '0')}'
+          '${now.day.toString().padLeft(2, '0')}_'
+          '${now.hour.toString().padLeft(2, '0')}'
+          '${now.minute.toString().padLeft(2, '0')}';
+      final fileName = '매출관리_백업_$stamp.json';
+      final backupJson = const JsonEncoder.withIndent('  ').convert(backupData);
+
+      if (Platform.isWindows) {
+        // Windows: 사용자가 저장 위치(예: 바탕화면)를 직접 선택하도록 한다.
+        final savedPath = await FilePicker.platform.saveFile(
+          dialogTitle: '매출관리 백업 파일 저장',
+          fileName: fileName,
+          type: FileType.custom,
+          allowedExtensions: ['json'],
+          bytes: Uint8List.fromList(utf8.encode(backupJson)),
+        );
+        if (savedPath == null) return;
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('백업 파일을 저장했어: $savedPath')),
+        );
+      } else {
+        // iPhone: 공유 메뉴에서 '파일에 저장'을 선택하면 iCloud Drive에 저장할 수 있다.
+        final directory = await getTemporaryDirectory();
+        final file = File('${directory.path}/$fileName');
+        await file.writeAsString(backupJson, flush: true);
+
+        await SharePlus.instance.share(
+          ShareParams(
+            files: [XFile(file.path, mimeType: 'application/json')],
+            text: '매출관리 백업 파일이야. “파일에 저장”을 선택한 뒤 iCloud Drive에 저장해 줘.',
+          ),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('백업 파일을 저장하지 못했어: $e')),
+      );
+    }
+  }
+
+  // =====================================================
+  // 백업 파일 복원
+  // =====================================================
+
+  Future<void> importBackup() async {
+    try {
+      final picked = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['json'],
+        withData: true,
+      );
+
+      if (picked == null || picked.files.isEmpty) return;
+
+      final bytes = picked.files.single.bytes;
+      if (bytes == null || bytes.isEmpty) {
+        throw const FormatException('선택한 파일을 읽을 수 없어.');
+      }
+
+      final decoded = jsonDecode(utf8.decode(bytes));
+      if (decoded is! Map) {
+        throw const FormatException('백업 파일 형식이 올바르지 않아.');
+      }
+
+      if (decoded['app'] != 'sales_goal_app' ||
+          decoded['backupVersion'] != 1 ||
+          decoded['baseGoal'] is! num ||
+          decoded['dailySales'] is! Map ||
+          decoded['goalHistory'] is! Map) {
+        throw const FormatException('매출관리 백업 파일이 아니거나 형식이 달라.');
+      }
+
+      final restoredBaseGoal = (decoded['baseGoal'] as num).toInt();
+      final rawSales = decoded['dailySales'] as Map;
+      final rawGoalHistory = decoded['goalHistory'] as Map;
+      final restoredSales = <String, int>{};
+      final restoredGoalHistory = <String, int>{};
+
+      if (restoredBaseGoal < 0) {
+        throw const FormatException('목표 금액이 올바르지 않아.');
+      }
+
+      for (final entry in rawSales.entries) {
+        final key = entry.key.toString();
+        final value = entry.value;
+        if (DateTime.tryParse(key) == null ||
+            value is! num ||
+            value < 0) {
+          throw const FormatException('날짜별 매출 데이터가 올바르지 않아.');
+        }
+        restoredSales[key] = value.toInt();
+      }
+
+      for (final entry in rawGoalHistory.entries) {
+        final key = entry.key.toString();
+        final value = entry.value;
+        if (DateTime.tryParse(key) == null ||
+            value is! num ||
+            value < 0) {
+          throw const FormatException('목표 변경 기록이 올바르지 않아.');
+        }
+        restoredGoalHistory[key] = value.toInt();
+      }
+
+      if (!mounted) return;
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('백업 데이터 복원'),
+          content: Text(
+            '백업 파일에 저장된 날짜별 매출 ${restoredSales.length}건과 '
+            '목표 변경 기록 ${restoredGoalHistory.length}건을 복원할 거야.\n\n'
+            '현재 앱의 매출과 목표 기록은 백업 파일의 내용으로 교체돼. '
+            '복원 전에 현재 데이터도 백업했는지 확인해 줘.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('취소'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('복원하기'),
+            ),
+          ],
+        ),
+      );
+
+      if (confirmed != true) return;
+
+      await prefs.setInt(baseGoalKey, restoredBaseGoal);
+      await prefs.setString(dailySalesKey, jsonEncode(restoredSales));
+      await prefs.setString(goalHistoryKey, jsonEncode(restoredGoalHistory));
+
+      if (!mounted) return;
+      setState(() {
+        baseGoal = restoredBaseGoal;
+        dailySales
+          ..clear()
+          ..addAll(restoredSales);
+        goalHistory
+          ..clear()
+          ..addAll(restoredGoalHistory);
+        loadSelectedDate();
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('매출 데이터 복원이 완료됐어.')),
+      );
+    } on FormatException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('복원할 수 없는 파일이야: ${e.message}')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('복원 중 문제가 발생했어: $e')),
+      );
+    }
   }
 
   // =====================================================
@@ -902,9 +1087,6 @@ class _SalesGoalHomePageState
                 const InputDecoration(
               hintText: '예: 80',
               suffixText: '만원',
-                                suffixStyle: TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                ),
             ),
           ),
           actions: [
@@ -969,6 +1151,58 @@ class _SalesGoalHomePageState
         Set<String>.from(
       selectedSalesDates,
     );
+
+    // 드래그 선택 시 날짜 셀의 화면 위치를 찾기 위한 키
+    final Map<String, GlobalKey> calendarCellKeys = {};
+    String? dragStartKey;
+    bool isDragging = false;
+    bool dragSelectMode = true; // true: 선택, false: 선택 해제
+    Set<String> dragBaseSelection = {};
+
+    String? dateKeyAtPosition(Offset globalPosition) {
+      for (final entry in calendarCellKeys.entries) {
+        final cellContext = entry.value.currentContext;
+        if (cellContext == null) continue;
+        final object = cellContext.findRenderObject();
+        if (object is! RenderBox || !object.attached) continue;
+        final topLeft = object.localToGlobal(Offset.zero);
+        if ((topLeft & object.size).contains(globalPosition)) {
+          return entry.key;
+        }
+      }
+      return null;
+    }
+
+    void applyDragRange(
+      void Function(void Function()) setDialogState,
+      String startKey,
+      String endKey,
+    ) {
+      final a = startKey.split('-').map(int.parse).toList();
+      final b = endKey.split('-').map(int.parse).toList();
+      final start = DateTime(a[0], a[1], a[2]);
+      final end = DateTime(b[0], b[1], b[2]);
+      if (start.year != end.year || start.month != end.month) return;
+
+      setDialogState(() {
+        tempSelected
+          ..clear()
+          ..addAll(dragBaseSelection);
+        final first = start.isBefore(end) ? start : end;
+        final last = start.isAfter(end) ? start : end;
+        for (DateTime date = first;
+            !date.isAfter(last);
+            date = date.add(const Duration(days: 1))) {
+          if (date.isBefore(firstInputDate)) continue;
+          final key = dateKey(date);
+          if (dragSelectMode) {
+            tempSelected.add(key);
+          } else {
+            tempSelected.remove(key);
+          }
+        }
+      });
+    }
 
     DateTime displayedMonth = DateTime(
       selectedDate.year,
@@ -1074,6 +1308,9 @@ class _SalesGoalHomePageState
                                     ? () {
                                         setDialogState(
                                           () {
+                                            calendarCellKeys.clear();
+                                            dragStartKey = null;
+                                            isDragging = false;
                                             displayedMonth =
                                                 DateTime(
                                               displayedMonth
@@ -1111,6 +1348,9 @@ class _SalesGoalHomePageState
                             onPressed: () {
                               setDialogState(
                                 () {
+                                  calendarCellKeys.clear();
+                                  dragStartKey = null;
+                                  isDragging = false;
                                   displayedMonth =
                                       DateTime(
                                     displayedMonth.year,
@@ -1148,8 +1388,36 @@ class _SalesGoalHomePageState
 
                       // 날짜
                       Expanded(
-                        child:
-                            GridView.builder(
+                        child: GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onPanStart: (details) {
+                            final startKey = dragStartKey ??
+                                dateKeyAtPosition(details.globalPosition);
+                            if (startKey == null) return;
+                            isDragging = true;
+                            dragStartKey = startKey;
+                            dragSelectMode = !tempSelected.contains(startKey);
+                            dragBaseSelection = Set<String>.from(tempSelected);
+                            final currentKey =
+                                dateKeyAtPosition(details.globalPosition) ?? startKey;
+                            applyDragRange(setDialogState, startKey, currentKey);
+                          },
+                          onPanUpdate: (details) {
+                            if (!isDragging || dragStartKey == null) return;
+                            final currentKey = dateKeyAtPosition(details.globalPosition);
+                            if (currentKey == null) return;
+                            applyDragRange(setDialogState, dragStartKey!, currentKey);
+                          },
+                          onPanEnd: (_) {
+                            isDragging = false;
+                            dragStartKey = null;
+                          },
+                          onPanCancel: () {
+                            isDragging = false;
+                            dragStartKey = null;
+                          },
+                          child: GridView.builder(
+                          padding: EdgeInsets.zero,
                           physics:
                               const NeverScrollableScrollPhysics(),
                           gridDelegate:
@@ -1188,6 +1456,10 @@ class _SalesGoalHomePageState
 
                             final key =
                                 dateKey(date);
+                            final cellKey = calendarCellKeys.putIfAbsent(
+                              key,
+                              () => GlobalKey(),
+                            );
 
                             final isSelected =
                                 tempSelected
@@ -1212,6 +1484,7 @@ class _SalesGoalHomePageState
                                         dayBaseGoal;
 
                             return Padding(
+                              key: cellKey,
                               padding:
                                   const EdgeInsets.all(
                                 2,
@@ -1243,6 +1516,9 @@ class _SalesGoalHomePageState
                                         }
                                       },
                                     );
+                                    if (!isDragging) {
+                                      dragStartKey = null;
+                                    }
                                   },
                                   child: Padding(
                                     padding:
@@ -1349,6 +1625,7 @@ class _SalesGoalHomePageState
                               ),
                             );
                           },
+                        ),
                         ),
                       ),
 
@@ -1509,6 +1786,40 @@ class _SalesGoalHomePageState
     return total;
   }
 
+  // 선택한 월의 매출만 합산한다. 날짜별 원본 데이터는 그대로 유지한다.
+  int calculateMonthTotal(DateTime month) {
+    final prefix = '${month.year}-'
+        '${month.month.toString().padLeft(2, '0')}-';
+    int total = 0;
+    for (final entry in dailySales.entries) {
+      if (entry.key.startsWith(prefix)) total += entry.value;
+    }
+    return total;
+  }
+
+  List<DateTime> get summaryMonthOptions {
+    DateTime latestMonth = DateTime(
+      DateTime.now().year,
+      DateTime.now().month,
+      1,
+    );
+    for (final key in dailySales.keys) {
+      final parsed = DateTime.tryParse(key);
+      if (parsed == null) continue;
+      final month = DateTime(parsed.year, parsed.month, 1);
+      if (month.isAfter(latestMonth)) latestMonth = month;
+    }
+
+    final options = <DateTime>[];
+    DateTime month = DateTime(firstInputDate.year, firstInputDate.month, 1);
+    while (!month.isAfter(latestMonth)) {
+      options.add(month);
+      month = DateTime(month.year, month.month + 1, 1);
+    }
+    if (options.isEmpty) options.add(latestMonth);
+    return options;
+  }
+
   // =====================================================
   // 시작
   // =====================================================
@@ -1573,107 +1884,83 @@ class _SalesGoalHomePageState
     final difference =
         sales - target;
 
-    // 선택 날짜 합계
+    // 선택 날짜 합계. 아무 날짜도 선택하지 않았으면 오늘 매출을 표시한다.
     final selectedTotal =
         calculateSelectedDatesTotal();
+    final todayDate = DateTime.now();
+    final todaySalesTotal =
+        dailySales[dateKey(todayDate)] ?? 0;
+    final displayedSalesTotal = selectedSalesDates.isNotEmpty
+        ? selectedTotal
+        : todaySalesTotal;
+    final displayedDatesText = selectedSalesDates.isNotEmpty
+        ? selectedDatesText
+        : '${formatDate(todayDate)} (오늘)';
 
     return Scaffold(
-      backgroundColor: const Color(0xFF6B6B6B),
-      body: SafeArea(
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            final isWide = constraints.maxWidth >= 700;
-            final windowWidth = isWide
-                ? constraints.maxWidth * 0.82
-                : constraints.maxWidth * 0.92;
-            final windowHeight = constraints.maxHeight * 0.92;
+      appBar: AppBar(
+        title: const Text(
+          '매출관리',
+          style: TextStyle(
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        actions: [
+          PopupMenuButton<String>(
+            tooltip: '백업 및 복원',
+            onSelected: (value) {
+              if (value == 'backup') {
+                exportBackup();
+              } else if (value == 'restore') {
+                importBackup();
+              }
+            },
+            itemBuilder: (context) => const [
+              PopupMenuItem<String>(
+                value: 'backup',
+                child: Row(
+                  children: [
+                    Icon(Icons.download),
+                    SizedBox(width: 10),
+                    Text('데이터 백업'),
+                  ],
+                ),
+              ),
+              PopupMenuItem<String>(
+                value: 'restore',
+                child: Row(
+                  children: [
+                    Icon(Icons.upload),
+                    SizedBox(width: 10),
+                    Text('데이터 복원'),
+                  ],
+                ),
+              ),
+            ],
+            icon: const Icon(Icons.backup_outlined),
+          ),
+          IconButton(
+            onPressed: changeGoal,
+            icon: const Icon(
+              Icons.settings,
+            ),
+            tooltip: '목표 설정',
+          ),
+        ],
+      ),
 
-            return Center(
-              child: SizedBox(
-                width: windowWidth,
-                height: windowHeight,
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFE7E7E7),
-                    border: Border.all(
-                      color: const Color(0xFF303030),
-                      width: 2,
-                    ),
-                    boxShadow: const [
-                      BoxShadow(
-                        color: Color(0x55000000),
-                        blurRadius: 14,
-                        offset: Offset(5, 6),
-                      ),
-                    ],
-                  ),
-                  child: ClipRect(
-                    clipBehavior: Clip.hardEdge,
-                    child: Column(
-                      children: [
-                        // 레트로 윈도우 제목 표시줄
-                      Container(
-                        height: 48,
-                        padding: const EdgeInsets.only(left: 12, right: 6),
-                        decoration: const BoxDecoration(
-                          color: Color(0xFF1238A8),
-                          border: Border(
-                            bottom: BorderSide(
-                              color: Color(0xFF0B2370),
-                              width: 2,
-                            ),
-                          ),
-                        ),
-                        child: Row(
-                          children: [
-                            const Expanded(
-                              child: Text(
-                                '매출관리',
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ),
-                            IconButton(
-                              onPressed: changeGoal,
-                              tooltip: '목표 설정',
-                              icon: const Icon(
-                                Icons.settings,
-                                color: Colors.white,
-                                size: 19,
-                              ),
-                              padding: EdgeInsets.zero,
-                              constraints: const BoxConstraints(
-                                minWidth: 34,
-                                minHeight: 34,
-                              ),
-                            ),
-                            _windowButton(Icons.remove),
-                            _windowButton(Icons.crop_square),
-                            _windowButton(Icons.close),
-                          ],
-                        ),
-                      ),
+      body: GestureDetector(
+        // 화면 다른 곳을 터치하면
+        // 숫자 키보드 닫기
+        onTap: dismissKeyboard,
+        behavior: HitTestBehavior.translucent,
 
-                      // 실제 앱 내용
-                      Expanded(
-                        child: ClipRect(
-                          child: GestureDetector(
-                            // 화면 다른 곳을 터치하면 숫자 키보드 닫기
-                            onTap: dismissKeyboard,
-                            behavior: HitTestBehavior.translucent,
-                            child: ScrollConfiguration(
-                              behavior: const ScrollBehavior().copyWith(
-                                overscroll: false,
-                                scrollbars: true,
-                              ),
-                              child: SingleChildScrollView(
-                                clipBehavior: Clip.hardEdge,
-                                physics: const ClampingScrollPhysics(),
-                                padding: const EdgeInsets.all(16),
-                            child: Column(
+        child: SafeArea(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(20),
+            child: Column(
               crossAxisAlignment:
                   CrossAxisAlignment.stretch,
               children: [
@@ -1854,7 +2141,8 @@ class _SalesGoalHomePageState
                         '오늘 매출 입력',
                         style: TextStyle(
                           fontSize: 16,
-                          fontWeight: FontWeight.bold,
+                          fontWeight:
+                              FontWeight.bold,
                         ),
                       ),
 
@@ -1872,11 +2160,13 @@ class _SalesGoalHomePageState
                                   InputDecoration(
                                 hintText: '매출 금액',
                                 suffixText: '만원',
-                                suffixStyle: const TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                ),
-                                border: const OutlineInputBorder(
-                                  borderRadius: BorderRadius.zero,
+                                border:
+                                    OutlineInputBorder(
+                                  borderRadius:
+                                      BorderRadius
+                                          .circular(
+                                    12,
+                                  ),
                                 ),
                               ),
                             ),
@@ -1888,18 +2178,9 @@ class _SalesGoalHomePageState
                             height: 56,
                             child: FilledButton(
                               onPressed: saveSales,
-                              style: FilledButton.styleFrom(
-                                backgroundColor: const Color(0xFF1238A8),
-                                foregroundColor: Colors.white,
-                                shape: const RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.zero,
-                                ),
-                              ),
-                              child: const Text(
+                              child:
+                                  const Text(
                                 '저장',
-                                style: TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                ),
                               ),
                             ),
                           ),
@@ -2019,66 +2300,43 @@ class _SalesGoalHomePageState
 
                       const SizedBox(height: 10),
 
-                      if (selectedSalesDates
-                          .isNotEmpty) ...[
-                        Text(
-                          selectedDatesText,
-                          textAlign:
-                              TextAlign.center,
-                          style:
-                              const TextStyle(
-                            fontSize: 15,
-                            fontWeight:
-                                FontWeight.w600,
-                          ),
+                      Text(
+                        displayedDatesText,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600,
                         ),
+                      ),
 
-                        const SizedBox(height: 12),
+                      const SizedBox(height: 12),
 
-                        Text(
-                          money(selectedTotal),
-                          textAlign:
-                              TextAlign.center,
-                          style:
-                              const TextStyle(
-                            fontSize: 28,
-                            fontWeight:
-                                FontWeight.bold,
-                          ),
+                      Text(
+                        money(displayedSalesTotal),
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          fontSize: 28,
+                          fontWeight: FontWeight.bold,
                         ),
-                      ] else
-                        const Text(
-                          '아직 선택한 날짜가 없어.',
-                          textAlign:
-                              TextAlign.center,
-                          style: TextStyle(
-                            color: Colors.grey,
-                          ),
-                        ),
+                      ),
 
                       const SizedBox(height: 14),
 
-                      FilledButton.icon(
-                        onPressed: selectSalesDates,
+                      OutlinedButton.icon(
+                        onPressed:
+                            selectSalesDates,
                         icon: const Icon(
                           Icons.date_range,
-                          color: Colors.white,
                         ),
                         label: const Text(
                           '날짜 선택',
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.bold,
-                          ),
                         ),
-                        style: FilledButton.styleFrom(
-                          backgroundColor: Colors.blue.shade800,
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(
+                        style:
+                            OutlinedButton.styleFrom(
+                          padding:
+                              const EdgeInsets
+                                  .symmetric(
                             vertical: 14,
-                          ),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(28),
                           ),
                         ),
                       ),
@@ -2106,79 +2364,66 @@ class _SalesGoalHomePageState
                         ),
                       ),
 
-                      const SizedBox(height: 12),
+                      const SizedBox(height: 10),
+
+                      Row(
+                        children: [
+                          const Text(
+                            '조회 월',
+                            style: TextStyle(
+                              color: Colors.grey,
+                              fontSize: 14,
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: DropdownButton<DateTime>(
+                              isExpanded: true,
+                              value: summaryMonthOptions.contains(
+                                DateTime(summaryMonth.year, summaryMonth.month, 1),
+                              )
+                                  ? DateTime(summaryMonth.year, summaryMonth.month, 1)
+                                  : summaryMonthOptions.last,
+                              items: summaryMonthOptions.map((month) {
+                                return DropdownMenuItem<DateTime>(
+                                  value: month,
+                                  child: Text('${month.year}년 ${month.month}월'),
+                                );
+                              }).toList(),
+                              onChanged: (month) {
+                                if (month == null) return;
+                                setState(() => summaryMonth = month);
+                              },
+                            ),
+                          ),
+                        ],
+                      ),
+
+                      const SizedBox(height: 8),
 
                       Text(
-                        money(calculateAllTotal()),
-                        textAlign:
-                            TextAlign.center,
-                        style:
-                            const TextStyle(
+                        '${summaryMonth.year}년 ${summaryMonth.month}월 매출',
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          color: Colors.grey,
+                          fontSize: 14,
+                        ),
+                      ),
+
+                      const SizedBox(height: 4),
+
+                      Text(
+                        money(calculateMonthTotal(summaryMonth)),
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
                           fontSize: 28,
-                          fontWeight:
-                              FontWeight.bold,
+                          fontWeight: FontWeight.bold,
                         ),
                       ),
                     ],
                   ),
                 ),
               ],
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              ),
-            );
-          },
-        ),
-      ),
-    );
-  }
-
-  Widget _windowButton(IconData icon) {
-    final isMinimize = icon == Icons.remove;
-
-    return Padding(
-      padding: const EdgeInsets.only(left: 4),
-      child: SizedBox(
-        width: 40,
-        height: 34,
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            color: const Color(0xFFD8D8D8),
-            border: Border.all(
-              color: const Color(0xFF303030),
-              width: 1.5,
-            ),
-            boxShadow: const [
-              BoxShadow(
-                color: Color(0xFF7A7A7A),
-                offset: Offset(2, 2),
-                blurRadius: 0,
-              ),
-            ],
-          ),
-          child: Material(
-            color: Colors.transparent,
-            child: InkWell(
-              onTap: null,
-              child: Center(
-                child: Transform.translate(
-                  offset: Offset(0, isMinimize ? 4 : 0),
-                  child: Icon(
-                    icon,
-                    color: Colors.black,
-                    size: 26,
-                    weight: 900,
-                  ),
-                ),
-              ),
             ),
           ),
         ),
@@ -2194,11 +2439,13 @@ class _SalesGoalHomePageState
     required Widget child,
   }) {
     return Container(
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
         color: Colors.white,
+        borderRadius:
+            BorderRadius.circular(18),
         border: Border.all(
-          color: const Color(0xFFD0D0D0),
+          color: Colors.grey.shade200,
         ),
       ),
       child: child,
