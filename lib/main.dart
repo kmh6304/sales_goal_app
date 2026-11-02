@@ -32,7 +32,7 @@ class SalesGoalApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(
           seedColor: Colors.blue,
         ),
-        scaffoldBackgroundColor: const Color(0xFFF7F8FA),
+        scaffoldBackgroundColor: const Color(0xFFE7E7E7),
       ),
       home: const SalesGoalHomePage(),
     );
@@ -820,6 +820,10 @@ class _SalesGoalHomePageState
             );
 
             return Dialog(
+              backgroundColor: const Color(0xFFE6E7ED),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(36),
+              ),
               child: SizedBox(
                 width: 380,
                 height: 510,
@@ -1252,6 +1256,10 @@ class _SalesGoalHomePageState
             );
 
             return Dialog(
+              backgroundColor: const Color(0xFFE6E7ED),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(36),
+              ),
               child: SizedBox(
                 width: 380,
                 height: 510,
@@ -1893,26 +1901,44 @@ class _SalesGoalHomePageState
         : '${formatDate(todayDate)} (오늘)';
 
     return Scaffold(
+      backgroundColor: const Color(0xFFE7E7E7),
       appBar: AppBar(
+        toolbarHeight: 62,
+        titleSpacing: 18,
         title: const Text(
           '매출관리',
           style: TextStyle(
+            color: Colors.white,
             fontWeight: FontWeight.bold,
+            fontSize: 20,
           ),
         ),
-        backgroundColor: Colors.transparent,
+        backgroundColor: const Color(0xFF173EAD),
+        foregroundColor: Colors.white,
         elevation: 0,
         actions: [
           PopupMenuButton<String>(
-            tooltip: '백업 및 복원',
+            tooltip: '설정 및 백업',
             onSelected: (value) {
-              if (value == 'backup') {
+              if (value == 'goal') {
+                changeGoal();
+              } else if (value == 'backup') {
                 exportBackup();
               } else if (value == 'restore') {
                 importBackup();
               }
             },
             itemBuilder: (context) => const [
+              PopupMenuItem<String>(
+                value: 'goal',
+                child: Row(
+                  children: [
+                    Icon(Icons.settings),
+                    SizedBox(width: 10),
+                    Text('목표 설정'),
+                  ],
+                ),
+              ),
               PopupMenuItem<String>(
                 value: 'backup',
                 child: Row(
@@ -1934,15 +1960,13 @@ class _SalesGoalHomePageState
                 ),
               ),
             ],
-            icon: const Icon(Icons.backup_outlined),
+            icon: const Icon(Icons.settings, size: 25),
           ),
-          IconButton(
-            onPressed: changeGoal,
-            icon: const Icon(
-              Icons.settings,
-            ),
-            tooltip: '목표 설정',
-          ),
+          const SizedBox(width: 2),
+          _windowButton(Icons.remove, '최소화'),
+          _windowButton(Icons.crop_square, '최대화'),
+          _windowButton(Icons.close, '닫기'),
+          const SizedBox(width: 7),
         ],
       ),
 
@@ -1954,7 +1978,7 @@ class _SalesGoalHomePageState
 
         child: SafeArea(
           child: SingleChildScrollView(
-            padding: const EdgeInsets.all(20),
+            padding: const EdgeInsets.fromLTRB(18, 18, 18, 20),
             child: Column(
               crossAxisAlignment:
                   CrossAxisAlignment.stretch,
@@ -2082,12 +2106,8 @@ class _SalesGoalHomePageState
                             const EdgeInsets.all(18),
                         decoration:
                             BoxDecoration(
-                          color:
-                              Colors.blue.shade50,
-                          borderRadius:
-                              BorderRadius.circular(
-                            16,
-                          ),
+                          color: const Color(0xFFE2F2FF),
+                          borderRadius: BorderRadius.circular(30),
                         ),
                         child: Column(
                           crossAxisAlignment:
@@ -2157,10 +2177,10 @@ class _SalesGoalHomePageState
                                 suffixText: '만원',
                                 border:
                                     OutlineInputBorder(
-                                  borderRadius:
-                                      BorderRadius
-                                          .circular(
-                                    12,
+                                  borderRadius: BorderRadius.zero,
+                                  borderSide: const BorderSide(
+                                    color: Color(0xFF80858D),
+                                    width: 1.5,
                                   ),
                                 ),
                               ),
@@ -2173,10 +2193,15 @@ class _SalesGoalHomePageState
                             height: 56,
                             child: FilledButton(
                               onPressed: saveSales,
-                              child:
-                                  const Text(
-                                '저장',
+                              style: FilledButton.styleFrom(
+                                backgroundColor: const Color(0xFF173EAD),
+                                foregroundColor: Colors.white,
+                                shape: const RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.zero,
+                                ),
+                                padding: const EdgeInsets.symmetric(horizontal: 24),
                               ),
+                              child: const Text('저장'),
                             ),
                           ),
                         ],
@@ -2430,6 +2455,26 @@ class _SalesGoalHomePageState
   // 카드
   // =====================================================
 
+  Widget _windowButton(IconData icon, String label) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 7, horizontal: 2),
+      child: Tooltip(
+        message: label,
+        child: Container(
+          width: 40,
+          decoration: BoxDecoration(
+            color: const Color(0xFFE3E3E3),
+            border: Border.all(color: const Color(0xFF353535), width: 1.5),
+            boxShadow: const [
+              BoxShadow(color: Color(0xFF777777), offset: Offset(2, 2), blurRadius: 0),
+            ],
+          ),
+          child: Icon(icon, color: Colors.black, size: 24),
+        ),
+      ),
+    );
+  }
+
   Widget _card({
     required Widget child,
   }) {
@@ -2437,10 +2482,10 @@ class _SalesGoalHomePageState
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius:
-            BorderRadius.circular(18),
+        borderRadius: BorderRadius.zero,
         border: Border.all(
-          color: Colors.grey.shade200,
+          color: const Color(0xFFD0D0D0),
+          width: 1.2,
         ),
       ),
       child: child,
