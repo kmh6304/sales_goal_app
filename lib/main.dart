@@ -253,62 +253,12 @@ class _SalesGoalHomePageState extends State<SalesGoalHomePage> {
   }
 
   // =====================================================
-  // 전날까지 이월 계산
-  //
-  // + = 초과
-  // - = 미달
-  //
-  // 실제 목표 = 기본 목표 - 이월
+  // 일별 계산: 이전 날짜 및 이전 달의 실적은 이월하지 않는다.
+  // 매일 기본 목표금액을 기준으로 독립 계산한다.
   // =====================================================
 
-  int calculateCarryBefore(
-    DateTime targetDate,
-  ) {
-    int carry = 0;
-
-    // 이월은 월별로 독립 계산한다. 전월 정산 결과는 다음 달로 넘기지 않는다.
-    final selectedDay = DateTime(
-      targetDate.year,
-      targetDate.month,
-      targetDate.day,
-    );
-
-    DateTime current = DateTime(
-      selectedDay.year,
-      selectedDay.month,
-      1,
-    );
-
-    // 앱의 매출 입력 시작일보다 이전 날짜는 계산하지 않는다.
-    if (current.isBefore(firstInputDate)) {
-      current = DateTime(
-        firstInputDate.year,
-        firstInputDate.month,
-        firstInputDate.day,
-      );
-    }
-
-    while (current.isBefore(selectedDay)) {
-      final key = dateKey(current);
-
-      if (dailySales.containsKey(key)) {
-        final sales = dailySales[key] ?? 0;
-
-        final dayBaseGoal =
-            getBaseGoalForDate(current);
-
-        final effectiveTarget =
-            dayBaseGoal - carry;
-
-        carry = sales - effectiveTarget;
-      }
-
-      current = current.add(
-        const Duration(days: 1),
-      );
-    }
-
-    return carry;
+  int calculateCarryBefore(DateTime targetDate) {
+    return 0;
   }
 
   // =====================================================
@@ -592,7 +542,7 @@ class _SalesGoalHomePageState extends State<SalesGoalHomePage> {
         final value = entry.value;
         if (DateTime.tryParse(key) == null ||
             value is! num ||
-            value < 0) {
+            value <= 0) {
           throw const FormatException('날짜별 매출 데이터가 올바르지 않아.');
         }
         if (value.toInt() > 0) {
@@ -950,8 +900,8 @@ class _SalesGoalHomePageState extends State<SalesGoalHomePage> {
                                             maxLines: 1,
                                             overflow: TextOverflow.clip,
                                             style: TextStyle(
-                                              fontSize: 10.5,
-                                              height: 1.05,
+                                              fontSize: 13,
+                                              height: 1.1,
                                               fontWeight: FontWeight.w900,
                                               color: isSelected
                                                   ? Colors.white
@@ -1541,8 +1491,8 @@ class _SalesGoalHomePageState extends State<SalesGoalHomePage> {
                                             children: [
                                               // 초록 / 빨강
                                               Container(
-                                                width: 6,
-                                                height: 6,
+                                                width: 7,
+                                                height: 7,
                                                 decoration:
                                                     BoxDecoration(
                                                   shape:
@@ -1575,7 +1525,7 @@ class _SalesGoalHomePageState extends State<SalesGoalHomePage> {
                                                     style:
                                                         TextStyle(
                                                       fontSize:
-                                                          11,
+                                                          13,
                                                       fontWeight:
                                                           FontWeight
                                                               .w900,
@@ -1839,17 +1789,12 @@ class _SalesGoalHomePageState extends State<SalesGoalHomePage> {
     // 현재 날짜 기본 목표
     final dayBaseGoal = currentBaseGoal;
 
-    // 전날까지 이월
-    final carry =
-        calculateCarryBefore(selectedDate);
+    // 매일 기본 목표를 독립 적용한다. 전날/전월 이월은 없다.
+    final target = dayBaseGoal;
 
-    // 오늘 실제 달성 목표
-    final target =
-        dayBaseGoal - carry;
-
-    // 오늘 결과
-    final difference =
-        sales - target;
+    // 선택한 날짜의 매출과 당일 목표만 비교한다.
+    final difference = sales - target;
+    final hasSalesRecord = dailySales.containsKey(dateKey(selectedDate));
 
     // 선택 날짜 합계. 아무 날짜도 선택하지 않았으면 오늘 매출을 표시한다.
     final selectedTotal =
@@ -2049,12 +1994,8 @@ class _SalesGoalHomePageState extends State<SalesGoalHomePage> {
                       const SizedBox(height: 5),
 
                       Text(
-                        carry == 0
-                            ? '오늘 목표: '
-                                '${money(dayBaseGoal)}'
-                            : '오늘 목표: '
-                                '${money(dayBaseGoal)} '
-                                '${carryText(carry)}',
+                        '오늘 목표: ${money(dayBaseGoal)}'
+                        '${hasSalesRecord && difference != 0 ? ' ${carryText(difference)}' : ''}',
                         style: const TextStyle(
                           fontSize: 21,
                           fontWeight:
