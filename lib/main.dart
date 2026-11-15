@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -47,9 +46,7 @@ class SalesGoalHomePage extends StatefulWidget {
       _SalesGoalHomePageState();
 }
 
-class _SalesGoalHomePageState
-    extends State<SalesGoalHomePage>
-    with WidgetsBindingObserver {
+class _SalesGoalHomePageState extends State<SalesGoalHomePage> {
   // =====================================================
   // 매출 입력 시작일
   // =====================================================
@@ -101,12 +98,6 @@ class _SalesGoalHomePageState
   // =====================================================
 
   bool isLoading = true;
-
-  // =====================================================
-  // 자정 날짜 확인용 타이머
-  // =====================================================
-
-  Timer? dateCheckTimer;
 
   // =====================================================
   // 매출 입력
@@ -192,7 +183,7 @@ class _SalesGoalHomePageState
     }
 
     if (amount == 0) {
-      return '';
+      return '0';
     }
 
     return '$amount원';
@@ -455,11 +446,12 @@ class _SalesGoalHomePageState
         selectedDate = firstInputDate;
       }
 
-      // 날짜 선택은 화면에서 임시로 사용하는 상태다.
-      // 이전 실행에서 저장된 날짜가 오늘 표시를 덮어쓰지 않도록
-      // 앱을 열 때 선택 목록을 비운다. 매출 데이터는 변경하지 않는다.
-      selectedSalesDates.clear();
-      await prefs.remove(selectedSalesDatesKey);
+      // 합산 달력에서 선택했던 날짜도 함께 복원한다.
+      final savedSelectedSalesDates =
+          await prefs.getStringList(selectedSalesDatesKey);
+      selectedSalesDates
+        ..clear()
+        ..addAll(savedSelectedSalesDates ?? const <String>[]);
     } catch (e) {
       // 저장 데이터 오류가 있어도
       // 기본값으로 계속 실행
@@ -474,70 +466,6 @@ class _SalesGoalHomePageState
       loadSelectedDate();
     });
 
-    checkDateChange();
-    startDateWatcher();
-  }
-
-  // =====================================================
-  // 자정 날짜 감시 시작
-  // =====================================================
-
-  void startDateWatcher() {
-    dateCheckTimer?.cancel();
-
-    dateCheckTimer = Timer.periodic(
-      const Duration(seconds: 30),
-      (_) {
-        checkDateChange();
-      },
-    );
-  }
-
-  // =====================================================
-  // 날짜가 바뀌었는지 확인
-  // =====================================================
-
-  void checkDateChange() {
-    if (!mounted || isLoading) {
-      return;
-    }
-
-    final now = DateTime.now();
-
-    if (now.isBefore(firstInputDate)) {
-      return;
-    }
-
-    final today = DateTime(
-      now.year,
-      now.month,
-      now.day,
-    );
-
-    if (dateKey(today) !=
-        dateKey(selectedDate)) {
-      dismissKeyboard();
-
-      setState(() {
-        selectedDate = today;
-        loadSelectedDate();
-      });
-
-      saveSelectedDate();
-    }
-  }
-
-  // =====================================================
-  // 앱이 다시 활성화되었을 때
-  // =====================================================
-
-  @override
-  void didChangeAppLifecycleState(
-    AppLifecycleState state,
-  ) {
-    if (state == AppLifecycleState.resumed) {
-      checkDateChange();
-    }
   }
 
   // =====================================================
@@ -955,9 +883,11 @@ class _SalesGoalHomePageState
                               return const SizedBox();
                             }
 
+                            final key = dateKey(date);
+                            final daySales = dailySales[key];
+
                             final isSelected =
-                                dateKey(date) ==
-                                dateKey(selectedDate);
+                                key == dateKey(selectedDate);
 
                             final dayColor = isSelected
                                 ? Colors.white
@@ -988,14 +918,33 @@ class _SalesGoalHomePageState
                                     ).pop();
                                   },
                                   child: Center(
-                                    child: Text(
-                                      '$day',
-                                      style: TextStyle(
-                                        fontSize: 24,
-                                        fontWeight:
-                                            FontWeight.bold,
-                                        color: dayColor,
-                                      ),
+                                    child: Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      mainAxisAlignment: MainAxisAlignment.center,
+                                      children: [
+                                        Text(
+                                          '$day',
+                                          style: TextStyle(
+                                            fontSize: 21,
+                                            fontWeight: FontWeight.bold,
+                                            color: dayColor,
+                                          ),
+                                        ),
+                                        if (daySales != null)
+                                          Text(
+                                            shortMoney(daySales),
+                                            maxLines: 1,
+                                            overflow: TextOverflow.clip,
+                                            style: TextStyle(
+                                              fontSize: 8,
+                                              height: 1.0,
+                                              fontWeight: FontWeight.bold,
+                                              color: isSelected
+                                                  ? Colors.white
+                                                  : Colors.grey.shade700,
+                                            ),
+                                          ),
+                                      ],
                                     ),
                                   ),
                                 ),
@@ -1831,8 +1780,6 @@ class _SalesGoalHomePageState
   void initState() {
     super.initState();
 
-    WidgetsBinding.instance.addObserver(this);
-
     if (selectedDate.isBefore(firstInputDate)) {
       selectedDate = firstInputDate;
     }
@@ -1846,11 +1793,6 @@ class _SalesGoalHomePageState
 
   @override
   void dispose() {
-    dateCheckTimer?.cancel();
-
-    WidgetsBinding.instance
-        .removeObserver(this);
-
     salesController.dispose();
 
     super.dispose();
