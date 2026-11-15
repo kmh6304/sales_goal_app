@@ -266,17 +266,27 @@ class _SalesGoalHomePageState extends State<SalesGoalHomePage> {
   ) {
     int carry = 0;
 
-    DateTime current = DateTime(
-      firstInputDate.year,
-      firstInputDate.month,
-      firstInputDate.day,
-    );
-
+    // 이월은 월별로 독립 계산한다. 전월 정산 결과는 다음 달로 넘기지 않는다.
     final selectedDay = DateTime(
       targetDate.year,
       targetDate.month,
       targetDate.day,
     );
+
+    DateTime current = DateTime(
+      selectedDay.year,
+      selectedDay.month,
+      1,
+    );
+
+    // 앱의 매출 입력 시작일보다 이전 날짜는 계산하지 않는다.
+    if (current.isBefore(firstInputDate)) {
+      current = DateTime(
+        firstInputDate.year,
+        firstInputDate.month,
+        firstInputDate.day,
+      );
+    }
 
     while (current.isBefore(selectedDay)) {
       final key = dateKey(current);
@@ -398,9 +408,8 @@ class _SalesGoalHomePageState extends State<SalesGoalHomePage> {
 
           decoded.forEach(
             (key, value) {
-              if (value is num) {
-                dailySales[key.toString()] =
-                    value.toInt();
+              if (value is num && value.toInt() > 0) {
+                dailySales[key.toString()] = value.toInt();
               }
             },
           );
@@ -456,6 +465,9 @@ class _SalesGoalHomePageState extends State<SalesGoalHomePage> {
       // 저장 데이터 오류가 있어도
       // 기본값으로 계속 실행
     }
+
+    // 이전 버전에서 저장된 미입력 0원 기록을 영구 정리한다.
+    await saveDailySales();
 
     if (!mounted) {
       return;
@@ -583,7 +595,9 @@ class _SalesGoalHomePageState extends State<SalesGoalHomePage> {
             value < 0) {
           throw const FormatException('날짜별 매출 데이터가 올바르지 않아.');
         }
-        restoredSales[key] = value.toInt();
+        if (value.toInt() > 0) {
+          restoredSales[key] = value.toInt();
+        }
       }
 
       for (final entry in rawGoalHistory.entries) {
@@ -936,9 +950,9 @@ class _SalesGoalHomePageState extends State<SalesGoalHomePage> {
                                             maxLines: 1,
                                             overflow: TextOverflow.clip,
                                             style: TextStyle(
-                                              fontSize: 8,
-                                              height: 1.0,
-                                              fontWeight: FontWeight.bold,
+                                              fontSize: 10.5,
+                                              height: 1.05,
+                                              fontWeight: FontWeight.w900,
                                               color: isSelected
                                                   ? Colors.white
                                                   : Colors.grey.shade700,
@@ -982,22 +996,30 @@ class _SalesGoalHomePageState extends State<SalesGoalHomePage> {
   Future<void> saveSales() async {
     dismissKeyboard();
 
-    final input = int.tryParse(
-          salesController.text
-              .replaceAll(',', '')
-              .trim(),
-        ) ??
-        0;
+    final rawInput = salesController.text
+        .replaceAll(',', '')
+        .trim();
 
-    final value = input * 10000;
+    // 입력창이 비어 있거나 0이면 해당 날짜는 미입력으로 처리한다.
+    final input = rawInput.isEmpty ? null : int.tryParse(rawInput);
 
-    if (value < 0) {
+    if (input == null || input < 0) {
+      setState(() {
+        dailySales.remove(dateKey(selectedDate));
+        salesController.clear();
+      });
+      await saveDailySales();
       return;
     }
 
+    final value = input * 10000;
+
     setState(() {
-      dailySales[dateKey(selectedDate)] =
-          value;
+      if (value == 0) {
+        dailySales.remove(dateKey(selectedDate));
+      } else {
+        dailySales[dateKey(selectedDate)] = value;
+      }
     });
 
     await saveDailySales();
@@ -1553,10 +1575,10 @@ class _SalesGoalHomePageState extends State<SalesGoalHomePage> {
                                                     style:
                                                         TextStyle(
                                                       fontSize:
-                                                          9,
+                                                          11,
                                                       fontWeight:
                                                           FontWeight
-                                                              .bold,
+                                                              .w900,
                                                       color:
                                                           isSelected
                                                               ? Colors
